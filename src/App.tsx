@@ -1,115 +1,92 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { AnatomyProvider, useAnatomy } from './interaction/AnatomyContext';
-import { MissionProvider } from './missions/MissionContext';
 import { CanvasContainer } from './scene/CanvasContainer';
-import { Header } from './components/Header';
-import { SystemControls } from './components/SystemControls';
-import { AnatomyInfoPanel } from './components/AnatomyInfoPanel';
-import { MissionOverlay } from './components/MissionOverlay';
-import { SocraticTutorModal } from './components/SocraticTutorModal';
-import { KeyboardHelpModal } from './components/KeyboardHelpModal';
+import { TopMinimalHeader } from './components/ui/TopMinimalHeader';
+import { BottomControlDock } from './components/ui/BottomControlDock';
+import { OrganContextDrawer } from './components/ui/OrganContextDrawer';
 import { AccessibilityLiveRegion } from './components/AccessibilityLiveRegion';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { ATTRIBUTION } from './data/curriculum';
+import { CloseSvg, InfoSvg, ResetSvg } from './components/ui/AnatomyIcons';
 
 const MainAppContent: React.FC = () => {
-  const { highContrast, reducedMotion, perfStats, resetCamera, clearSelection } = useAnatomy();
-  const [isSocraticOpen, setIsSocraticOpen] = useState(false);
-  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const {
+    perfStats,
+    resetCamera,
+    selectStructure,
+    isAttributionOpen,
+    setAttributionOpen,
+  } = useAnatomy();
 
-  // Global keydown handler for Escape to reset/clear
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        clearSelection();
-        resetCamera();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (isAttributionOpen) {
+        setAttributionOpen(false);
+        return;
       }
+      selectStructure(null);
+      resetCamera();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection, resetCamera]);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isAttributionOpen, setAttributionOpen, selectStructure, resetCamera]);
 
   return (
-    <div
-      className={`app-container ${highContrast ? 'high-contrast' : ''} ${reducedMotion ? 'reduced-motion' : ''}`}
-      style={{
-        width: '100vw',
-        height: '100vh',
-        position: 'relative',
-        overflow: 'hidden',
-        background: '#090d16',
-      }}
-    >
-      {/* 1. Header Toolbar */}
-      <Header
-        onOpenSocratic={() => setIsSocraticOpen(true)}
-        onOpenHelp={() => setIsHelpOpen(true)}
-      />
-
-      {/* 2. Fullscreen Interactive 3D WebGL Canvas */}
-      <main style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }} aria-label="3D Anatomy Viewer">
+    <div className="minimal-shell">
+      {/* Unobstructed Fullscreen 3D Canvas (>=75% open viewport) */}
+      <main className="minimal-stage" aria-label="Unified 3D Anatomy Viewport">
         <CanvasContainer />
       </main>
 
-      {/* 3. Left System Layers & Dissection Drawer */}
-      <SystemControls />
+      {/* Minimal Floating Top Header */}
+      <TopMinimalHeader />
 
-      {/* 4. Right Reviewed Educational Information Drawer */}
-      <AnatomyInfoPanel />
+      {/* Contextual Floating Right Organ/NCERT Drawer */}
+      <OrganContextDrawer />
 
-      {/* 5. Bottom Gamified Mission HUD (Cardiac Highway / Arm Assembly) */}
-      <MissionOverlay />
+      {/* Bottom Floating Control Dock */}
+      <BottomControlDock />
 
-      {/* 6. Modals */}
-      <SocraticTutorModal
-        isOpen={isSocraticOpen}
-        onClose={() => setIsSocraticOpen(false)}
-      />
+      {/* Attribution & License Modal */}
+      {isAttributionOpen && (
+        <div className="modal-backdrop" onClick={() => setAttributionOpen(false)}>
+          <div className="modal-dialog" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <InfoSvg size={15} color="#38bdf8" />
+                <h2 style={{ fontSize: 14, fontWeight: 700 }}>Attribution &amp; Open Licensing</h2>
+              </div>
+              <button
+                type="button"
+                className="hud-icon-btn"
+                onClick={() => setAttributionOpen(false)}
+                aria-label="Close Attribution Modal"
+              >
+                <CloseSvg />
+              </button>
+            </div>
+            <p style={{ fontSize: 12, color: '#e2e8f0', lineHeight: 1.6 }}>{ATTRIBUTION}</p>
+            <p style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>
+              Unified male &amp; female glTF models compressed with EXT_meshopt_compression at origin (0, 0, 0). NCERT Biology textbook links connect to official ncert.nic.in chapters.
+            </p>
+          </div>
+        </div>
+      )}
 
-      <KeyboardHelpModal
-        isOpen={isHelpOpen}
-        onClose={() => setIsHelpOpen(false)}
-      />
-
-      {/* 7. Screen Reader Live Announcer */}
       <AccessibilityLiveRegion />
 
-      {/* 8. WebGL Context Loss Recovery Banner */}
       {perfStats.contextLost && (
-        <div
-          role="alert"
-          style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            background: 'rgba(15, 23, 42, 0.95)',
-            border: '2px solid #ef4444',
-            borderRadius: 16,
-            padding: '24px 32px',
-            zIndex: 100,
-            textAlign: 'center',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 12,
-            boxShadow: '0 0 30px rgba(239, 68, 68, 0.4)',
-          }}
-        >
-          <AlertTriangle size={36} color="#ef4444" />
-          <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: '#f8fafc' }}>
-            WebGL Context Temporarily Lost
-          </h2>
-          <p style={{ fontSize: 14, color: '#cbd5e1', maxWidth: 380, margin: 0, lineHeight: 1.5 }}>
-            Your GPU device driver refreshed or suspended graphics resources. The engine is preserving your anatomical session state and automatically awaiting context restoration.
-          </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => window.location.reload()}
-            style={{ marginTop: 8 }}
-          >
-            <RefreshCw size={14} />
-            <span>Force Reload Laboratory</span>
-          </button>
+        <div className="modal-backdrop" role="alert">
+          <div className="modal-dialog" style={{ maxWidth: 400, textAlign: 'center', alignItems: 'center' }}>
+            <h2 style={{ fontSize: 15, fontWeight: 700 }}>WebGL Context Interrupted</h2>
+            <p style={{ fontSize: 12, color: '#94a3b8' }}>
+              Graphics resources were suspended by the browser. Reload to restore the 3D scene.
+            </p>
+            <button type="button" className="hud-btn is-active" onClick={() => window.location.reload()}>
+              <ResetSvg />
+              <span>Reload Lab</span>
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -119,9 +96,7 @@ const MainAppContent: React.FC = () => {
 export default function App() {
   return (
     <AnatomyProvider>
-      <MissionProvider>
-        <MainAppContent />
-      </MissionProvider>
+      <MainAppContent />
     </AnatomyProvider>
   );
 }

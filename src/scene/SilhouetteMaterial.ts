@@ -1,22 +1,22 @@
 import * as THREE from 'three';
 
 /**
- * Fresnel / Rim-light shader for the translucent human body silhouette boundary.
- * Interior organs and bones remain 100% visible. Only the glancing edges are lit.
- * Uses AdditiveBlending so it never occludes inner structures.
+ * Translucent Fresnel / X-Ray shader for the `skin` boundary layer.
+ * Uses `depthWrite: false` and low base opacity so internal bones, organs,
+ * vessels, and nerves remain clearly visible inside the unified coordinate space.
  */
-export function createSilhouetteMaterial(highContrast = false): THREE.ShaderMaterial {
+export function createSilhouetteMaterial(xrayMode = true): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     depthTest: true,
-    side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending,
+    side: THREE.FrontSide,
+    blending: THREE.NormalBlending,
     uniforms: {
-      uColor: { value: new THREE.Color(highContrast ? '#ffff00' : '#00d2c4') },
-      uRimPower: { value: 3.2 },
-      uRimIntensity: { value: 1.4 },
-      uBaseOpacity: { value: 0.03 },
+      uColor: { value: new THREE.Color('#38bdf8') },
+      uRimPower: { value: 2.8 },
+      uRimIntensity: { value: xrayMode ? 0.68 : 0.42 },
+      uBaseOpacity: { value: xrayMode ? 0.045 : 0.14 },
     },
     vertexShader: /* glsl */ `
       varying vec3 vNormal;
@@ -40,7 +40,7 @@ export function createSilhouetteMaterial(highContrast = false): THREE.ShaderMate
         vec3 viewDir = normalize(vViewPosition);
         float rim = 1.0 - abs(dot(viewDir, normal));
         rim = pow(clamp(rim, 0.0, 1.0), uRimPower) * uRimIntensity;
-        float alpha = clamp(uBaseOpacity + rim, 0.0, 0.85);
+        float alpha = clamp(uBaseOpacity + rim, 0.0, 0.65);
         gl_FragColor = vec4(uColor, alpha);
       }
     `,

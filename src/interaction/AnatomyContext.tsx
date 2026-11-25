@@ -1,287 +1,367 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
-import type { AnatomicalStructure, AnatomicalSystemId } from '../anatomy/types';
-import { ANATOMY_REGISTRY, ANATOMICAL_SYSTEMS } from '../anatomy/registry';
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import {
+  ANATOMY_BY_KEY,
+  COURSE_CHAPTERS,
+  OPTIONAL_EXTENSION_MODELS,
+  type AnatomySex,
+  type NcertGrade,
+  type TopLayerId,
+} from '../data/curriculum';
+import type { MuscleBifurcationGroup } from '../utils/anatomyClassifier';
 
-export type CameraPreset = 'default' | 'anterior' | 'posterior' | 'left_lateral' | 'right_lateral' | 'thorax' | 'forearm' | 'cranial';
+export type CameraPreset = 'default' | 'anterior' | 'posterior' | 'left_lateral' | 'right_lateral' | 'thorax' | 'cranial';
 
-export interface ClippingConfig {
-  enabled: boolean;
-  axis: 'x' | 'y' | 'z';
-  position: number;
-  negate: boolean;
+export interface PinProjection {
+  key: string;
+  label: string;
+  color: string;
+  x: number;
+  y: number;
+  visible: boolean;
+}
+
+export interface ExtensionAssetStatus {
+  id: string;
+  filename: string;
+  label: string;
+  status: 'checking' | 'loaded' | 'pending' | 'error';
+  meshCount?: number;
+  withinSkin?: boolean;
+  boxSummary?: string;
 }
 
 export interface PerformanceStats {
   fps: number;
   drawCalls: number;
   triangles: number;
-  resolutionScale: number;
-  isLowPerformance: boolean;
   contextLost: boolean;
 }
 
 interface AnatomyContextValue {
-  // Selection
-  selectedStructureId: string | null;
-  hoveredStructureId: string | null;
-  selectedStructure: AnatomicalStructure | null;
-  selectStructure: (id: string | null) => void;
-  setHoveredStructure: (id: string | null) => void;
-  clearSelection: () => void;
+  sex: AnatomySex;
+  setSex: (sex: AnatomySex) => void;
+  selectedKey: string | null;
+  hoveredKey: string | null;
+  selectStructure: (key: string | null, focusCamera?: boolean) => void;
+  setHoveredStructure: (key: string | null) => void;
 
-  // System visibility
-  systemVisibility: Record<AnatomicalSystemId, boolean>;
-  setSystemVisibility: (systemId: AnatomicalSystemId, visible: boolean) => void;
-  toggleSystemVisibility: (systemId: AnatomicalSystemId) => void;
-  isolateSystem: (systemId: AnatomicalSystemId) => void;
-  restoreAllSystems: () => void;
+  // Strict Top-Level Layer Toggles (with zero cross-system leaks)
+  visibleLayers: Record<TopLayerId, boolean>;
+  toggleLayer: (layer: TopLayerId) => void;
+  muscleGroupVisibility: Record<MuscleBifurcationGroup, boolean>;
+  toggleMuscleGroup: (group: MuscleBifurcationGroup) => void;
+  xrayMode: boolean;
+  setXrayMode: (enabled: boolean) => void;
+  toggleXrayOrSkeletonIsolation: () => void;
+  showPins: boolean;
+  setShowPins: (show: boolean) => void;
+  resetLayers: () => void;
 
-  // Camera & view controls
+  // NCERT Filter & Chapter Context
+  ncertFilter: 'ALL' | NcertGrade;
+  setNcertFilter: (filter: 'ALL' | NcertGrade) => void;
+  activeChapterId: string;
+  setActiveChapterId: (id: string) => void;
+
+  // Drop-In Extension Status
+  extensionStatuses: Record<string, ExtensionAssetStatus>;
+  setExtensionStatus: (id: string, update: Partial<ExtensionAssetStatus>) => void;
+
+  // Hand Gesture Control
+  handControlEnabled: boolean;
+  setHandControlEnabled: (enabled: boolean) => void;
+  handStatusText: string;
+  setHandStatusText: (text: string) => void;
+
+  // Camera & Zoom
   cameraPreset: CameraPreset;
   setCameraPreset: (preset: CameraPreset) => void;
-  cameraFocusTarget: [number, number, number] | null;
-  cameraDistance: number;
-  focusStructure: (id: string) => void;
+  cameraFocusKey: string | null;
+  cameraRequestNonce: number;
+  zoomPercent: number;
+  setZoomPercent: (pct: number) => void;
+  zoomRequestDelta: number;
+  zoomRequestNonce: number;
+  triggerZoom: (delta: number) => void;
+  focusStructure: (key: string) => void;
   resetCamera: () => void;
 
-  // Clipping / Cutaway
-  clipping: ClippingConfig;
-  setClipping: React.Dispatch<React.SetStateAction<ClippingConfig>>;
-  resetClipping: () => void;
-
-  // Performance & Quality adaptation
+  // Diagnostics & Attribution
   perfStats: PerformanceStats;
   updatePerfStats: (stats: Partial<PerformanceStats>) => void;
   setContextLost: (lost: boolean) => void;
-
-  // Accessibility
-  highContrast: boolean;
-  setHighContrast: (enabled: boolean) => void;
-  reducedMotion: boolean;
-  setReducedMotion: (enabled: boolean) => void;
+  isAttributionOpen: boolean;
+  setAttributionOpen: (open: boolean) => void;
   liveAnnouncement: string;
-  announce: (message: string) => void;
 }
+
+const DEFAULT_VISIBLE_LAYERS: Record<TopLayerId, boolean> = {
+  skin: true,
+  skeleton: true,
+  muscles: true,
+  organs: true,
+  arteries: true,
+  veins: true,
+  nerves: false,
+};
+
+const DEFAULT_MUSCLE_GROUPS: Record<MuscleBifurcationGroup, boolean> = {
+  axial_head_neck: true,
+  thoracic_abdominal: true,
+  upper_limb: true,
+  lower_limb: true,
+  cardiac_visceral: true,
+};
+
+const INITIAL_EXTENSION_STATUSES: Record<string, ExtensionAssetStatus> = Object.fromEntries(
+  OPTIONAL_EXTENSION_MODELS.map((m) => [
+    m.id,
+    { id: m.id, filename: m.filename, label: m.label, status: 'checking' },
+  ])
+);
 
 const AnatomyContext = createContext<AnatomyContextValue | null>(null);
 
-const DEFAULT_VISIBILITY: Record<AnatomicalSystemId, boolean> = {
-  skeletal: true,
-  circulatory: true,
-  respiratory: true,
-  digestive: true,
-  urinary: true,
-  nervous: true,
-  integumentary: true,
-};
-
 export const AnatomyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [selectedStructureId, setSelectedStructureId] = useState<string | null>('circ_right_atrium');
-  const [hoveredStructureId, setHoveredStructureId] = useState<string | null>(null);
-  const [systemVisibility, setSystemVisibilityState] = useState<Record<AnatomicalSystemId, boolean>>(DEFAULT_VISIBILITY);
-  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('default');
-  const [cameraFocusTarget, setCameraFocusTarget] = useState<[number, number, number] | null>([0, 2.0, 0]);
-  const [cameraDistance, setCameraDistance] = useState<number>(4.2);
+  const [sex, setSex] = useState<AnatomySex>('male');
+  const [selectedKey, setSelectedKey] = useState<string | null>('heart');
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
-  const [clipping, setClipping] = useState<ClippingConfig>({
-    enabled: false,
-    axis: 'z',
-    position: 0.35,
-    negate: false,
-  });
+  const [visibleLayers, setVisibleLayers] = useState<Record<TopLayerId, boolean>>(DEFAULT_VISIBLE_LAYERS);
+  const [muscleGroupVisibility, setMuscleGroupVisibility] = useState<Record<MuscleBifurcationGroup, boolean>>(DEFAULT_MUSCLE_GROUPS);
+  const [xrayMode, setXrayMode] = useState<boolean>(true);
+  const [showPins, setShowPins] = useState<boolean>(true);
+
+  const [ncertFilter, setNcertFilter] = useState<'ALL' | NcertGrade>('ALL');
+  const [activeChapterId, setActiveChapterIdState] = useState<string>('ch-2');
+
+  const [extensionStatuses, setExtensionStatuses] = useState<Record<string, ExtensionAssetStatus>>(INITIAL_EXTENSION_STATUSES);
+
+  const [handControlEnabled, setHandControlEnabled] = useState<boolean>(false);
+  const [handStatusText, setHandStatusText] = useState<string>('Hand Control Off');
+
+  const [cameraPreset, setCameraPresetState] = useState<CameraPreset>('default');
+  const [cameraFocusKey, setCameraFocusKey] = useState<string | null>('heart');
+  const [cameraRequestNonce, setCameraRequestNonce] = useState<number>(0);
+  const [zoomPercent, setZoomPercent] = useState<number>(100);
+  const [zoomRequestDelta, setZoomRequestDelta] = useState<number>(0);
+  const [zoomRequestNonce, setZoomRequestNonce] = useState<number>(0);
 
   const [perfStats, setPerfStats] = useState<PerformanceStats>({
     fps: 60,
-    drawCalls: 32,
-    triangles: 42500,
-    resolutionScale: 1.0,
-    isLowPerformance: false,
+    drawCalls: 0,
+    triangles: 0,
     contextLost: false,
   });
+  const [isAttributionOpen, setAttributionOpen] = useState<boolean>(false);
+  const [liveAnnouncement, setLiveAnnouncement] = useState<string>('3D Anatomy Lab ready.');
 
-  const [highContrast, setHighContrast] = useState<boolean>(false);
-  const [reducedMotion, setReducedMotion] = useState<boolean>(false);
-  const [liveAnnouncement, setLiveAnnouncement] = useState<string>('Welcome to Inside the Human Body 3D Explorer.');
-
-  const announce = useCallback((message: string) => {
-    setLiveAnnouncement(message);
-  }, []);
-
-  const selectStructure = useCallback((id: string | null) => {
-    setSelectedStructureId(id);
-    if (id && ANATOMY_REGISTRY[id]) {
-      const struct = ANATOMY_REGISTRY[id];
-      setCameraFocusTarget(struct.cameraFocus.target);
-      setCameraDistance(struct.cameraFocus.distance);
-      announce(`Selected ${struct.displayName}. ${struct.shortDescription}`);
+  const selectStructure = useCallback((key: string | null, shouldFocus = false) => {
+    setSelectedKey(key);
+    if (key && ANATOMY_BY_KEY[key]) {
+      setLiveAnnouncement(`Selected ${ANATOMY_BY_KEY[key].label}`);
+      if (shouldFocus) {
+        setCameraFocusKey(key);
+        setCameraRequestNonce((n) => n + 1);
+      }
+    } else if (key) {
+      setLiveAnnouncement(`Selected ${key}`);
+      if (shouldFocus) {
+        setCameraFocusKey(key);
+        setCameraRequestNonce((n) => n + 1);
+      }
     } else {
-      announce('Selection cleared');
+      setLiveAnnouncement('Selection cleared');
     }
-  }, [announce]);
-
-  const setHoveredStructure = useCallback((id: string | null) => {
-    setHoveredStructureId(id);
   }, []);
 
-  const clearSelection = useCallback(() => {
-    setSelectedStructureId(null);
-    announce('Selection cleared');
-  }, [announce]);
+  const setHoveredStructure = useCallback((key: string | null) => {
+    setHoveredKey(key);
+  }, []);
 
-  const setSystemVisibility = useCallback((systemId: AnatomicalSystemId, visible: boolean) => {
-    setSystemVisibilityState(prev => ({ ...prev, [systemId]: visible }));
-    announce(`${ANATOMICAL_SYSTEMS[systemId].displayName} ${visible ? 'shown' : 'hidden'}`);
-  }, [announce]);
-
-  const toggleSystemVisibility = useCallback((systemId: AnatomicalSystemId) => {
-    setSystemVisibilityState(prev => {
-      const next = !prev[systemId];
-      announce(`${ANATOMICAL_SYSTEMS[systemId].displayName} ${next ? 'shown' : 'hidden'}`);
-      return { ...prev, [systemId]: next };
+  const toggleLayer = useCallback((layer: TopLayerId) => {
+    setVisibleLayers((prev) => {
+      const next = !prev[layer];
+      setLiveAnnouncement(`${layer} layer ${next ? 'visible' : 'hidden'}`);
+      return { ...prev, [layer]: next };
     });
-  }, [announce]);
+  }, []);
 
-  const isolateSystem = useCallback((systemId: AnatomicalSystemId) => {
-    setSystemVisibilityState({
-      skeletal: systemId === 'skeletal',
-      circulatory: systemId === 'circulatory',
-      respiratory: systemId === 'respiratory',
-      digestive: systemId === 'digestive',
-      urinary: systemId === 'urinary',
-      nervous: systemId === 'nervous',
-      integumentary: false,
+  const toggleMuscleGroup = useCallback((group: MuscleBifurcationGroup) => {
+    setMuscleGroupVisibility((prev) => ({ ...prev, [group]: !prev[group] }));
+  }, []);
+
+  const toggleXrayOrSkeletonIsolation = useCallback(() => {
+    setXrayMode((prev) => {
+      const next = !prev;
+      setVisibleLayers((layers) => ({
+        ...layers,
+        skin: next,
+        skeleton: true,
+        muscles: next,
+      }));
+      return next;
     });
-    announce(`Isolated ${ANATOMICAL_SYSTEMS[systemId].displayName}`);
-  }, [announce]);
+  }, []);
 
-  const restoreAllSystems = useCallback(() => {
-    setSystemVisibilityState(DEFAULT_VISIBILITY);
-    announce('All anatomical systems restored');
-  }, [announce]);
+  const resetLayers = useCallback(() => {
+    setVisibleLayers(DEFAULT_VISIBLE_LAYERS);
+    setMuscleGroupVisibility(DEFAULT_MUSCLE_GROUPS);
+    setXrayMode(true);
+    setShowPins(true);
+    setLiveAnnouncement('Layers reset');
+  }, []);
 
-  const focusStructure = useCallback((id: string) => {
-    const struct = ANATOMY_REGISTRY[id];
-    if (struct) {
-      setSelectedStructureId(id);
-      setCameraFocusTarget(struct.cameraFocus.target);
-      setCameraDistance(struct.cameraFocus.distance);
-      announce(`Focused camera on ${struct.displayName}`);
-    }
-  }, [announce]);
+  const setActiveChapterId = useCallback((id: string) => {
+    setActiveChapterIdState(id);
+    const ch = COURSE_CHAPTERS.find((c) => c.id === id);
+    if (!ch) return;
+    if (ch.recommendedSex) setSex(ch.recommendedSex);
+    setVisibleLayers({
+      skin: ch.layers.includes('skin'),
+      skeleton: ch.layers.includes('skeleton'),
+      muscles: ch.layers.includes('muscles'),
+      organs: ch.layers.includes('organs'),
+      arteries: ch.layers.includes('arteries'),
+      veins: ch.layers.includes('veins'),
+      nerves: ch.layers.includes('nerves'),
+    });
+    setSelectedKey(ch.defaultFocusKey);
+    setCameraFocusKey(ch.defaultFocusKey);
+    setCameraRequestNonce((n) => n + 1);
+    setLiveAnnouncement(`Opened ${ch.title}`);
+  }, []);
+
+  const setExtensionStatus = useCallback((id: string, update: Partial<ExtensionAssetStatus>) => {
+    setExtensionStatuses((prev) => {
+      const existing = prev[id];
+      if (!existing) return prev;
+      return { ...prev, [id]: { ...existing, ...update } };
+    });
+  }, []);
+
+  const setCameraPreset = useCallback((preset: CameraPreset) => {
+    setCameraPresetState(preset);
+    setCameraFocusKey(null);
+    setCameraRequestNonce((n) => n + 1);
+  }, []);
+
+  const focusStructure = useCallback((key: string) => {
+    setSelectedKey(key);
+    setCameraFocusKey(key);
+    setCameraRequestNonce((n) => n + 1);
+  }, []);
 
   const resetCamera = useCallback(() => {
-    setCameraPreset('default');
-    setCameraFocusTarget([0, 1.2, 0]);
-    setCameraDistance(5.2);
-    announce('Camera reset to default whole body view');
-  }, [announce]);
+    setCameraPresetState('default');
+    setCameraFocusKey(null);
+    setCameraRequestNonce((n) => n + 1);
+    setZoomPercent(100);
+  }, []);
 
-  const resetClipping = useCallback(() => {
-    setClipping({
-      enabled: false,
-      axis: 'z',
-      position: 0.35,
-      negate: false,
-    });
-    announce('Dissection cutaway plane reset');
-  }, [announce]);
+  const triggerZoom = useCallback((delta: number) => {
+    setZoomRequestDelta(delta);
+    setZoomRequestNonce((n) => n + 1);
+  }, []);
 
   const updatePerfStats = useCallback((stats: Partial<PerformanceStats>) => {
-    setPerfStats(prev => ({ ...prev, ...stats }));
+    setPerfStats((prev) => ({ ...prev, ...stats }));
   }, []);
 
   const setContextLost = useCallback((lost: boolean) => {
-    setPerfStats(prev => ({ ...prev, contextLost: lost }));
-    if (lost) {
-      announce('Warning: WebGL context lost. Pausing 3D rendering pipeline.');
-    } else {
-      announce('WebGL context restored successfully.');
-    }
-  }, [announce]);
-
-  // Check user OS reduced motion preference on mount
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.matchMedia) {
-      const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-      if (media.matches) {
-        setReducedMotion(true);
-      }
-    }
+    setPerfStats((prev) => ({ ...prev, contextLost: lost }));
   }, []);
 
-  const selectedStructure = useMemo(() => {
-    return selectedStructureId ? ANATOMY_REGISTRY[selectedStructureId] || null : null;
-  }, [selectedStructureId]);
-
-  const value = useMemo<AnatomyContextValue>(() => ({
-    selectedStructureId,
-    hoveredStructureId,
-    selectedStructure,
-    selectStructure,
-    setHoveredStructure,
-    clearSelection,
-    systemVisibility,
-    setSystemVisibility,
-    toggleSystemVisibility,
-    isolateSystem,
-    restoreAllSystems,
-    cameraPreset,
-    setCameraPreset,
-    cameraFocusTarget,
-    cameraDistance,
-    focusStructure,
-    resetCamera,
-    clipping,
-    setClipping,
-    resetClipping,
-    perfStats,
-    updatePerfStats,
-    setContextLost,
-    highContrast,
-    setHighContrast,
-    reducedMotion,
-    setReducedMotion,
-    liveAnnouncement,
-    announce,
-  }), [
-    selectedStructureId,
-    hoveredStructureId,
-    selectedStructure,
-    selectStructure,
-    setHoveredStructure,
-    clearSelection,
-    systemVisibility,
-    setSystemVisibility,
-    toggleSystemVisibility,
-    isolateSystem,
-    restoreAllSystems,
-    cameraPreset,
-    cameraFocusTarget,
-    cameraDistance,
-    focusStructure,
-    resetCamera,
-    clipping,
-    resetClipping,
-    perfStats,
-    updatePerfStats,
-    setContextLost,
-    highContrast,
-    reducedMotion,
-    liveAnnouncement,
-    announce,
-  ]);
-
-  return (
-    <AnatomyContext.Provider value={value}>
-      {children}
-    </AnatomyContext.Provider>
+  const value = useMemo<AnatomyContextValue>(
+    () => ({
+      sex,
+      setSex,
+      selectedKey,
+      hoveredKey,
+      selectStructure,
+      setHoveredStructure,
+      visibleLayers,
+      toggleLayer,
+      muscleGroupVisibility,
+      toggleMuscleGroup,
+      xrayMode,
+      setXrayMode,
+      toggleXrayOrSkeletonIsolation,
+      showPins,
+      setShowPins,
+      resetLayers,
+      ncertFilter,
+      setNcertFilter,
+      activeChapterId,
+      setActiveChapterId,
+      extensionStatuses,
+      setExtensionStatus,
+      handControlEnabled,
+      setHandControlEnabled,
+      handStatusText,
+      setHandStatusText,
+      cameraPreset,
+      setCameraPreset,
+      cameraFocusKey,
+      cameraRequestNonce,
+      zoomPercent,
+      setZoomPercent,
+      zoomRequestDelta,
+      zoomRequestNonce,
+      triggerZoom,
+      focusStructure,
+      resetCamera,
+      perfStats,
+      updatePerfStats,
+      setContextLost,
+      isAttributionOpen,
+      setAttributionOpen,
+      liveAnnouncement,
+    }),
+    [
+      sex,
+      selectedKey,
+      hoveredKey,
+      selectStructure,
+      setHoveredStructure,
+      visibleLayers,
+      toggleLayer,
+      muscleGroupVisibility,
+      toggleMuscleGroup,
+      xrayMode,
+      toggleXrayOrSkeletonIsolation,
+      showPins,
+      resetLayers,
+      ncertFilter,
+      activeChapterId,
+      setActiveChapterId,
+      extensionStatuses,
+      setExtensionStatus,
+      handControlEnabled,
+      handStatusText,
+      cameraPreset,
+      setCameraPreset,
+      cameraFocusKey,
+      cameraRequestNonce,
+      zoomPercent,
+      zoomRequestDelta,
+      zoomRequestNonce,
+      triggerZoom,
+      focusStructure,
+      resetCamera,
+      perfStats,
+      updatePerfStats,
+      setContextLost,
+      isAttributionOpen,
+      liveAnnouncement,
+    ]
   );
+
+  return <AnatomyContext.Provider value={value}>{children}</AnatomyContext.Provider>;
 };
 
 export const useAnatomy = (): AnatomyContextValue => {
-  const context = useContext(AnatomyContext);
-  if (!context) {
-    throw new Error('useAnatomy must be used within an AnatomyProvider');
-  }
-  return context;
+  const ctx = useContext(AnatomyContext);
+  if (!ctx) throw new Error('useAnatomy must be used within AnatomyProvider');
+  return ctx;
 };
